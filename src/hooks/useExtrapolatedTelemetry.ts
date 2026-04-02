@@ -6,6 +6,9 @@ export interface LiveTelemetry {
   distFromCenter: number | null
   distToMoon: number | null
   speed: number | null
+  liveX: number | null   // extrapolated ECI X, feet
+  liveY: number | null   // extrapolated ECI Y, feet
+  liveZ: number | null   // extrapolated ECI Z, feet
 }
 
 const EARTH_RADIUS_MILES = 3958.8
@@ -18,7 +21,7 @@ function extrapolate(snapshot: TelemetryData): LiveTelemetry {
     snapshot.rawVx === null || snapshot.rawVy === null || snapshot.rawVz === null ||
     snapshot.receivedAt === null
   ) {
-    return { altitude: null, distFromCenter: null, distToMoon: null, speed: null }
+    return { altitude: null, distFromCenter: null, distToMoon: null, speed: null, liveX: null, liveY: null, liveZ: null }
   }
 
   const dt = (Date.now() - snapshot.receivedAt) / 1000 // seconds elapsed
@@ -29,9 +32,23 @@ function extrapolate(snapshot: TelemetryData): LiveTelemetry {
 
   const distFromCenter = Math.sqrt(xe * xe + ye * ye + ze * ze) / FT_PER_MILE
   const altitude = distFromCenter - EARTH_RADIUS_MILES
-  const distToMoon = Math.max(0, MOON_DIST_MILES - distFromCenter)
 
-  return { altitude, distFromCenter, distToMoon, speed: snapshot.speed }
+  // Use real Moon ECI position for accurate 3D distance (Moon moves ~0.6 mi/s, negligible over 15s)
+  let distToMoon: number | null = null
+  if (snapshot.moonEciX !== null && snapshot.moonEciY !== null && snapshot.moonEciZ !== null) {
+    const scX_mi = xe / FT_PER_MILE
+    const scY_mi = ye / FT_PER_MILE
+    const scZ_mi = ze / FT_PER_MILE
+    distToMoon = Math.sqrt(
+      (snapshot.moonEciX - scX_mi) ** 2 +
+      (snapshot.moonEciY - scY_mi) ** 2 +
+      (snapshot.moonEciZ - scZ_mi) ** 2
+    )
+  } else {
+    distToMoon = Math.max(0, MOON_DIST_MILES - distFromCenter)
+  }
+
+  return { altitude, distFromCenter, distToMoon, speed: snapshot.speed, liveX: xe, liveY: ye, liveZ: ze }
 }
 
 export function useExtrapolatedTelemetry(snapshot: TelemetryData): LiveTelemetry {

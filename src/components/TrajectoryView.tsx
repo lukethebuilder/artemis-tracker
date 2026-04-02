@@ -1,8 +1,11 @@
 interface TrajectoryViewProps {
-  distFromCenter: number | null // miles from Earth center
+  liveX: number | null   // extrapolated ECI X, feet
+  liveY: number | null   // extrapolated ECI Y, feet
+  liveZ: number | null   // extrapolated ECI Z, feet (unused in 2D projection)
+  moonEciX: number | null // Moon ECI X, miles
+  moonEciY: number | null // Moon ECI Y, miles
+  moonEciZ: number | null // Moon ECI Z, miles
 }
-
-const MOON_DIST = 238855 // miles
 
 // SVG viewBox dimensions
 const VW = 800
@@ -13,37 +16,65 @@ const EARTH_CX = 90
 const EARTH_CY = VH / 2
 const MOON_CX = VW - 90
 const MOON_CY = VH / 2
+const SVG_SPAN = MOON_CX - EARTH_CX  // 620px
+const MOON_FAR_X = MOON_CX + 20      // far side of Moon (Moon radius = 20px)
 
-// Bezier control point (arc bows upward)
-const CTRL_X = VW / 2
-const CTRL_Y = 30
+// Compress perpendicular axis so the dot stays within the SVG bounds
+const PERP_SCALE = 0.5
 
-function getOrionPoint(t: number) {
-  // Quadratic bezier: B(t) = (1-t)^2 * P0 + 2(1-t)t * P1 + t^2 * P2
-  const u = 1 - t
-  const x = u * u * EARTH_CX + 2 * u * t * CTRL_X + t * t * MOON_CX
-  const y = u * u * EARTH_CY + 2 * u * t * CTRL_Y + t * t * MOON_CY
-  return { x, y }
+// Free-return trajectory path control points
+// Outbound: bows above the Earth-Moon centerline
+const OUT_CP1_X = 200, OUT_CP1_Y = 65
+const OUT_CP2_X = 560, OUT_CP2_Y = 50
+// Return: bows below the Earth-Moon centerline
+const RET_CP1_X = 600, RET_CP1_Y = 200
+const RET_CP2_X = 250, RET_CP2_Y = 195
+
+const OUTBOUND_D = `M ${EARTH_CX} ${EARTH_CY} C ${OUT_CP1_X} ${OUT_CP1_Y} ${OUT_CP2_X} ${OUT_CP2_Y} ${MOON_FAR_X} ${MOON_CY}`
+const RETURN_D   = `M ${MOON_FAR_X} ${MOON_CY} C ${RET_CP1_X} ${RET_CP1_Y} ${RET_CP2_X} ${RET_CP2_Y} ${EARTH_CX} ${EARTH_CY}`
+
+function projectToSvg(
+  liveX: number, liveY: number,
+  moonEciX: number, moonEciY: number, moonEciZ: number
+): { x: number; y: number; isReturn: boolean } | null {
+  const moonDistNow = Math.sqrt(moonEciX ** 2 + moonEciY ** 2 + moonEciZ ** 2)
+  if (moonDistNow === 0) return null
+
+  // Angle of Moon direction in the ECI X-Y plane
+  const moonAngle = Math.atan2(moonEciY, moonEciX)
+  const cos = Math.cos(moonAngle)
+  const sin = Math.sin(moonAngle)
+
+  // Spacecraft position in miles
+  const scX_mi = liveX / 5280
+  const scY_mi = liveY / 5280
+
+  // Rotate spacecraft into Earth-Moon reference frame
+  const sc_along = scX_mi * cos + scY_mi * sin    // component along Earth-Moon axis
+  const sc_perp  = -scX_mi * sin + scY_mi * cos   // component perpendicular to it
+
+  const svgX = EARTH_CX + (sc_along / moonDistNow) * SVG_SPAN
+  const svgY = EARTH_CY - (sc_perp  / moonDistNow) * SVG_SPAN * PERP_SCALE
+
+  // Return leg: spacecraft is clearly below the Earth-Moon line (negative perpendicular)
+  const isReturn = sc_perp < -5000  // miles threshold
+
+  return { x: svgX, y: svgY, isReturn }
 }
 
-export default function TrajectoryView({ distFromCenter }: TrajectoryViewProps) {
-  const t = distFromCenter !== null
-    ? Math.min(0.98, Math.max(0.02, distFromCenter / MOON_DIST))
-    : null
+export default function TrajectoryView({ liveX, liveY, liveZ: _liveZ, moonEciX, moonEciY, moonEciZ }: TrajectoryViewProps) {
+  const orion = (
+    liveX !== null && liveY !== null &&
+    moonEciX !== null && moonEciY !== null && moonEciZ !== null
+  ) ? projectToSvg(liveX, liveY, moonEciX, moonEciY, moonEciZ) : null
 
-  const orion = t !== null ? getOrionPoint(t) : null
-
-  // Generate dots along the arc for dashed effect
-  const dashPoints: { x: number; y: number }[] = []
-  for (let i = 0; i <= 50; i++) {
-    if (i % 2 === 0) dashPoints.push(getOrionPoint(i / 50))
-  }
+  const isReturn = orion?.isReturn ?? false
 
   return (
     <div style={{ width: '100%', maxWidth: 840, margin: '0 auto' }}>
       <svg
         viewBox={`0 0 ${VW} ${VH}`}
-        style={{ width: '100%', height: 'auto', overflow: 'visible' }}
+        style={{ width: '100%', height: 'auto', overflow: 'hidden' }}
         aria-label="Orion trajectory diagram"
       >
         <defs>
@@ -79,36 +110,38 @@ export default function TrajectoryView({ distFromCenter }: TrajectoryViewProps) 
           </filter>
         </defs>
 
-        {/* Trajectory arc path (dashed) */}
+        {/* Outbound leg — dimmed when on return leg */}
         <path
-          d={`M ${EARTH_CX} ${EARTH_CY} Q ${CTRL_X} ${CTRL_Y} ${MOON_CX} ${MOON_CY}`}
+          d={OUTBOUND_D}
           fill="none"
-          stroke="#2a4a4a"
+          stroke={isReturn ? '#1a3a3a' : '#2a4a4a'}
           strokeWidth={1.5}
           strokeDasharray="6 8"
         />
 
-        {/* Teal highlight on traversed portion */}
-        {orion && t !== null && (
+        {/* Return leg — dimmed when on outbound leg */}
+        <path
+          d={RETURN_D}
+          fill="none"
+          stroke={isReturn ? '#2a4a4a' : '#1a3a3a'}
+          strokeWidth={1.5}
+          strokeDasharray="6 8"
+        />
+
+        {/* Active leg teal highlight */}
+        {orion && (
           <path
-            d={`M ${EARTH_CX} ${EARTH_CY} Q ${CTRL_X} ${CTRL_Y} ${MOON_CX} ${MOON_CY}`}
+            d={isReturn ? RETURN_D : OUTBOUND_D}
             fill="none"
             stroke="#5ECFCF"
             strokeWidth={1.5}
             strokeDasharray="6 8"
-            strokeDashoffset={0}
-            opacity={0.4}
-            clipPath={`inset(0 ${VW - orion.x - 1}px 0 0)`}
+            opacity={0.35}
           />
         )}
 
         {/* Moon */}
-        <circle
-          cx={MOON_CX}
-          cy={MOON_CY}
-          r={20}
-          fill="url(#moonGrad)"
-        />
+        <circle cx={MOON_CX} cy={MOON_CY} r={20} fill="url(#moonGrad)" />
 
         {/* Earth atmosphere */}
         <circle
@@ -148,12 +181,7 @@ export default function TrajectoryView({ distFromCenter }: TrajectoryViewProps) 
               filter="url(#orionGlow)"
             />
             {/* Center pin */}
-            <circle
-              cx={orion.x}
-              cy={orion.y}
-              r={2}
-              fill="#fff"
-            />
+            <circle cx={orion.x} cy={orion.y} r={2} fill="#fff" />
           </>
         )}
 

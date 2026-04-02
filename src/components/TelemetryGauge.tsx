@@ -199,7 +199,7 @@ export default function TelemetryGauge({
         >
           <span
             style={{
-              fontSize: isTimeValue ? 21 : hasValue && String(displayValue).length > 6 ? 20 : 42,
+              fontSize: isTimeValue ? 30 : String(displayValue).length <= 5 ? 36 : 30,
               fontWeight: 700,
               color: flash ? '#9EEAEA' : hasValue ? '#fff' : '#333',
               lineHeight: 1,

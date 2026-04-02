@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
+import { GeoMoon } from 'astronomy-engine'
 
 const ENDPOINT =
   'https://storage.googleapis.com/storage/v1/b/p-2-cen1/o/October%2F1%2FOctober_105_1.txt?alt=media'
@@ -23,6 +24,11 @@ export interface TelemetryData {
   rawVy: number | null
   rawVz: number | null
   receivedAt: number | null    // Date.now() at fetch time, for Δt calculation
+  // Moon ECI position (miles, J2000 equatorial) — same frame as raw vectors
+  moonEciX: number | null
+  moonEciY: number | null
+  moonEciZ: number | null
+  moonDistNow: number | null   // Earth-to-Moon distance at data time, miles
 }
 
 interface RawParameter {
@@ -42,6 +48,24 @@ interface RawTelemetry {
   Parameter_2011: RawParameter
 }
 
+const AU_TO_MILES = 92_955_807.3
+
+function parseNasaTime(s: string): Date | null {
+  const parts = s.split(':')
+  if (parts.length < 5) return null
+  const year = parseInt(parts[0], 10)
+  const doy  = parseInt(parts[1], 10)
+  const hh   = parseInt(parts[2], 10)
+  const mm   = parseInt(parts[3], 10)
+  const ss   = parseFloat(parts[4])
+  const ms = Date.UTC(year, 0, 1)
+           + (doy - 1) * 86_400_000
+           + hh * 3_600_000
+           + mm * 60_000
+           + Math.round(ss * 1000)
+  return new Date(ms)
+}
+
 function parseTelemetry(raw: RawTelemetry, receivedAt: number): Omit<TelemetryData, 'status' | 'lastUpdated'> {
   const x = parseFloat(raw.Parameter_2003.Value)
   const y = parseFloat(raw.Parameter_2004.Value)
@@ -53,14 +77,40 @@ function parseTelemetry(raw: RawTelemetry, receivedAt: number): Omit<TelemetryDa
   const distFromCenter = Math.sqrt(x * x + y * y + z * z) / 5280
   const altitude = distFromCenter - 3958.8
   const speed = Math.sqrt(vx * vx + vy * vy + vz * vz) * (3600 / 5280)
-  const distToMoon = Math.max(0, 238855 - distFromCenter)
   const dataTime = raw.Parameter_2003.Time
+
+  // Compute Moon ECI position from NASA timestamp for accurate distToMoon
+  let moonEciX: number | null = null
+  let moonEciY: number | null = null
+  let moonEciZ: number | null = null
+  let moonDistNow: number | null = null
+  let distToMoon: number | null = null
+
+  const dataDate = parseNasaTime(dataTime)
+  if (dataDate !== null) {
+    const moonVec = GeoMoon(dataDate)            // AU, J2000 equatorial — same frame as NASA ECI
+    moonEciX = moonVec.x * AU_TO_MILES
+    moonEciY = moonVec.y * AU_TO_MILES
+    moonEciZ = moonVec.z * AU_TO_MILES
+    moonDistNow = Math.sqrt(moonEciX ** 2 + moonEciY ** 2 + moonEciZ ** 2)
+    const scX_mi = x / 5280
+    const scY_mi = y / 5280
+    const scZ_mi = z / 5280
+    distToMoon = Math.sqrt(
+      (moonEciX - scX_mi) ** 2 +
+      (moonEciY - scY_mi) ** 2 +
+      (moonEciZ - scZ_mi) ** 2
+    )
+  } else {
+    distToMoon = Math.max(0, 238_855 - distFromCenter)
+  }
 
   return {
     altitude, speed, distToMoon, distFromCenter, dataTime,
     rawX: x, rawY: y, rawZ: z,
     rawVx: vx, rawVy: vy, rawVz: vz,
     receivedAt,
+    moonEciX, moonEciY, moonEciZ, moonDistNow,
   }
 }
 
@@ -70,10 +120,12 @@ const nullData: TelemetryData = {
   rawX: null, rawY: null, rawZ: null,
   rawVx: null, rawVy: null, rawVz: null,
   receivedAt: null,
+  moonEciX: null, moonEciY: null, moonEciZ: null, moonDistNow: null,
 }
 
 export function useTelemetry(): TelemetryData {
   const [data, setData] = useState<TelemetryData>(nullData)
+  const hasDataRef = React.useRef(false)
 
   useEffect(() => {
     const fetchData = async () => {
@@ -84,6 +136,7 @@ export function useTelemetry(): TelemetryData {
         const raw: RawTelemetry = await res.json()
         const parsed = parseTelemetry(raw, receivedAt)
 
+        hasDataRef.current = true
         setData({
           ...parsed,
           lastUpdated: new Date(receivedAt),
@@ -95,6 +148,10 @@ export function useTelemetry(): TelemetryData {
           const age = Date.now() - prev.lastUpdated.getTime()
           return { ...prev, status: age > STALE_THRESHOLD_MS ? 'stale' : prev.status }
         })
+        // Retry quickly on failure if we've never successfully loaded data
+        if (!hasDataRef.current) {
+          setTimeout(fetchData, 3_000)
+        }
       }
     }
 

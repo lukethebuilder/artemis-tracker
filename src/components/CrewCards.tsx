@@ -53,9 +53,9 @@ export default function CrewCards() {
         Crew
       </h2>
       <div
+        className="crew-grid"
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(4, 1fr)',
           gap: 16,
         }}
       >

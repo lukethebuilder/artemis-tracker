@@ -3,7 +3,6 @@ import StarField from './components/StarField'
 import MissionTimer from './components/MissionTimer'
 import TelemetryGauge from './components/TelemetryGauge'
 import TrajectoryView from './components/TrajectoryView'
-import MissionPhase from './components/MissionPhase'
 import CrewCards from './components/CrewCards'
 import { useTelemetry, POLL_INTERVAL_MS } from './hooks/useTelemetry'
 import { useExtrapolatedTelemetry } from './hooks/useExtrapolatedTelemetry'
@@ -74,8 +73,8 @@ export default function App() {
   }, [telemetry.lastUpdated])
 
   // Arc: fills as Orion travels toward Moon (0 = just launched, 1 = at Moon)
-  const moonJourneyProgress = live.distToMoon !== null
-    ? Math.min(1, Math.max(0, 1 - live.distToMoon / 238855))
+  const moonJourneyProgress = live.distToMoon !== null && telemetry.moonDistNow !== null
+    ? Math.min(1, Math.max(0, 1 - live.distToMoon / telemetry.moonDistNow))
     : undefined
 
   return (
@@ -90,18 +89,24 @@ export default function App() {
           82% { opacity: 1; transform: translateY(0); }
           100% { opacity: 0; transform: translateY(-1px); }
         }
+        .crew-grid { grid-template-columns: repeat(4, 1fr); }
         @media (max-width: 640px) {
-          .gauge-grid { grid-template-columns: repeat(2,1fr) !important; gap: 24px !important; }
-          .crew-grid  { grid-template-columns: repeat(2,1fr) !important; }
+          .gauge-grid    { grid-template-columns: repeat(2,1fr) !important; gap: 20px !important; }
+          .crew-grid     { grid-template-columns: repeat(2,1fr); gap: 10px !important; }
+          .crew-grid > * { padding: 16px 10px !important; min-width: 0; }
+          .header-meta   { display: none !important; }
+          .trajectory-section { padding: 28px 0 12px !important; }
+          .gauges-section     { padding: 0 0 40px !important; }
+          .app-padding        { padding: 0 16px !important; }
         }
       `}</style>
 
-      <div style={{ position: 'relative', zIndex: 1, maxWidth: 1100, margin: '0 auto', padding: '0 28px' }}>
+      <div className="app-padding" style={{ position: 'relative', zIndex: 1, maxWidth: 1100, margin: '0 auto', padding: '0 28px' }}>
 
         {/* ── Header ─────────────────────────────────────────────── */}
         <header style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '24px 0 20px',
+          padding: '20px 0 16px',
           borderBottom: '1px solid rgba(255,255,255,0.06)',
         }}>
           {/* Left: NASA + title */}
@@ -123,8 +128,8 @@ export default function App() {
           {/* Right: status + telemetry time */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
 
-            {/* "Updated" flash toast */}
-            <div style={{
+            {/* "Updated" flash toast — hidden on mobile */}
+            <div className="header-meta" style={{
               fontSize: 10, color: '#5ECFCF', letterSpacing: '0.14em',
               textTransform: 'uppercase', fontWeight: 600,
               opacity: showUpdated ? 1 : 0,
@@ -134,9 +139,9 @@ export default function App() {
               ↑ Updated
             </div>
 
-            {/* NASA data timestamp */}
+            {/* NASA data timestamp — hidden on mobile */}
             {telemetry.dataTime && (
-              <div style={{ textAlign: 'right' }}>
+              <div className="header-meta" style={{ textAlign: 'right' }}>
                 <div style={{ fontSize: 9, color: '#2e2e2e', letterSpacing: '0.1em', textTransform: 'uppercase' }}>Data time</div>
                 <div style={{ fontSize: 12, color: '#4a4a4a', fontVariantNumeric: 'tabular-nums' }}>
                   {formatNasaTime(telemetry.dataTime)}
@@ -144,9 +149,9 @@ export default function App() {
               </div>
             )}
 
-            {/* Poll countdown */}
+            {/* Poll countdown — hidden on mobile */}
             {telemetry.status !== 'error' && (
-              <div style={{ textAlign: 'right' }}>
+              <div className="header-meta" style={{ textAlign: 'right' }}>
                 <div style={{ fontSize: 9, color: '#2e2e2e', letterSpacing: '0.1em', textTransform: 'uppercase' }}>Refresh in</div>
                 <div style={{
                   fontSize: 13, fontVariantNumeric: 'tabular-nums', fontWeight: 600,
@@ -163,21 +168,20 @@ export default function App() {
         </header>
 
         {/* ── Trajectory ─────────────────────────────────────────── */}
-        <section style={{ padding: '52px 0 20px' }}>
-          {/* TrajectoryView uses live extrapolated position for smooth dot movement */}
-          <TrajectoryView distFromCenter={live.distFromCenter} />
+        <section className="trajectory-section" style={{ padding: '52px 0 20px' }}>
+          {/* TrajectoryView uses live extrapolated ECI position for smooth dot movement */}
+          <TrajectoryView
+            liveX={live.liveX}
+            liveY={live.liveY}
+            liveZ={live.liveZ}
+            moonEciX={telemetry.moonEciX}
+            moonEciY={telemetry.moonEciY}
+            moonEciZ={telemetry.moonEciZ}
+          />
         </section>
-
-        {/* ── Mission Phase ──────────────────────────────────────── */}
-        <section style={{ padding: '8px 0 52px' }}>
-          <MissionPhase />
-        </section>
-
-        {/* ── Divider ────────────────────────────────────────────── */}
-        <div style={{ height: 1, background: 'rgba(255,255,255,0.05)', marginBottom: 52 }} />
 
         {/* ── Telemetry Gauges ───────────────────────────────────── */}
-        <section style={{ padding: '0 0 68px' }}>
+        <section className="gauges-section" style={{ padding: '0 0 68px' }}>
           <div
             className="gauge-grid"
             style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 40, justifyItems: 'center' }}
@@ -198,7 +202,7 @@ export default function App() {
               value={live.altitude}
               unit="miles"
               label="Distance from Earth"
-              maxValue={238855}
+              maxValue={telemetry.moonDistNow ?? 238855}
               direction="ltr"
             />
 
@@ -207,7 +211,7 @@ export default function App() {
               value={live.distToMoon}
               unit="miles"
               label="Distance to Moon"
-              maxValue={238855}
+              maxValue={telemetry.moonDistNow ?? 238855}
               progress={moonJourneyProgress}
               direction="rtl"
             />
